@@ -117,23 +117,28 @@ app.get("/jobs/:id", async (req, res) => {
 // apply to a job — one application per seeker per job;
 app.post("/applications", async (req, res) => {
   const application = req.body;
-
   const result = await applications.insertOne(application);
-
   res.send(result);
 });
 
 app.get("/applications", async (req, res) => {
   const query = {};
-
-  if (req.query.userId) {
-    query.applicantId = req.query.userId;
+  if (req.query.applicantId) {
+    query.userId = req.query.applicantId;
   }
 
   const result = await applications.find(query).toArray();
-
   res.send(result);
 });
+
+app.get("/applications/count", async (req, res) => {
+  const query = {};
+  if (req.query.applicantId) {
+    query.applicantId = req.query.applicantId;
+  }
+  const result = await applications.countDocuments(query);
+  res.send({ count: result });
+});   
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
