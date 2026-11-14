@@ -2,6 +2,9 @@ import express from "express";
 import cors from "cors";
 import { MongoClient, ObjectId } from "mongodb";
 import "dotenv/config"; // for esm
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -27,14 +30,23 @@ const db = connectedClient.db("hireloop");
 const users = db.collection("user");
 const jobs = db.collection("jobs");
 const applications = db.collection("applications");
+const payments = db.collection("payments");
 
 app.get("/", (req, res) => {
   res.send("Hireloop Server is running!");
 });
 
+// users related api
 app.get("/users", async (req, res) => {
   const cursor = users.find({});
   const result = await cursor.toArray();
+  res.send(result);
+});
+
+app.get("/users/:id/premium", async (req, res) => {
+  const id = req.params.id;
+  const query = { _id: new ObjectId(id) };
+  const result = await users.findOne(query, { projection: { premium: 1 } });
   res.send(result);
 });
 
@@ -42,21 +54,20 @@ app.get("/users", async (req, res) => {
 
 app.get("/jobs", async (req, res) => {
   const query = {};
-
   if (req.query.jobType) {
     query.jobType = req.query.jobType;
   }
-
   if (req.query.workplaceType) {
     query.workplaceType = req.query.workplaceType;
   }
-
   if (req.query.experienceLevel) {
     query.experienceLevel = req.query.experienceLevel;
   }
-
   if (req.query.location) {
     query.location = req.query.location;
+  }
+  if (req.query.recruiterId) {
+    query.recruiterId = req.query.recruiterId;
   }
 
   if (req.query.search) {
@@ -75,9 +86,31 @@ app.get("/jobs", async (req, res) => {
 
 // insert a new job
 app.post("/jobs", async (req, res) => {
-  const job = req.body;
+  const { recruiterId } = req.body;
+  const recruiter = await users.findOne({
+    _id: recruiterId,
+  });
+  const jobCount = await jobs.countDocuments({
+    recruiterId,
+  });
+
+ if (!recruiter?.premium && jobCount >= 9) {
+    return res.status(403).send({
+      success: false,
+      message: "Free plan allows only 9 job postings. Upgrade to Premium.",
+    });
+  }
+
+  const job = {
+    ...req.body,
+    recruiterId,
+  };
   const result = await jobs.insertOne(job);
-  res.send(result);
+
+  res.send({
+    success: true,
+    insertedId: result.insertedId,
+  });
 });
 
 app.delete("/jobs/:id", async (req, res) => {
@@ -126,6 +159,12 @@ app.get("/applications", async (req, res) => {
   if (req.query.applicantId) {
     query.userId = req.query.applicantId;
   }
+  if (req.query.jobId) {
+    const asId = ObjectId.isValid(req.query.jobId)
+      ? new ObjectId(req.query.jobId)
+      : null;
+    query.jobId = asId ? { $in: [req.query.jobId, asId] } : req.query.jobId;
+  }
 
   const result = await applications.find(query).toArray();
   res.send(result);
@@ -134,11 +173,52 @@ app.get("/applications", async (req, res) => {
 app.get("/applications/count", async (req, res) => {
   const query = {};
   if (req.query.applicantId) {
-    query.applicantId = req.query.applicantId;
+    query.userId = req.query.applicantId;
   }
   const result = await applications.countDocuments(query);
   res.send({ count: result });
-});   
+});
+
+app.post("/payments/checkout-verify", async (req, res) => {
+  const { sessionId } = req.body;
+
+  const { status, payment_status, customer_email, metadata, payment_intent } =
+    await stripe.checkout.sessions.retrieve(sessionId);
+
+  // 1. is used new session
+  // 2. check is the session id for the currently logged in user
+  // 3. insert sessionId in to the payment collection
+  // 4. update user information as premium user
+  if (status === "complete" && payment_status === "paid") {
+    const sessionQuery = { sessionId };
+    const existingPayment = await payments.findOne(sessionQuery);
+    if (existingPayment) {
+      return res.send({ success: false, massage: "Payment already verified" });
+    }
+
+    const payment = {
+      sessionId,
+      status,
+      payment_status,
+      customer_email,
+      userId: metadata.userId,
+      payment_intent,
+    };
+    const result = await payments.insertOne(payment);
+
+    // update the user table
+    const query = { _id: new ObjectId(metadata.userId) };
+    const updatedDocs = {
+      $set: { premium: true },
+    };
+    const updateResult = await users.updateOne(query, updatedDocs);
+    res.send({ success: true, result, updateResult });
+    return;
+  }
+
+  res.send({ success: false, message: "Payment verification failed" });
+  return;
+});
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
