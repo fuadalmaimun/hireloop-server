@@ -113,18 +113,26 @@ app.post("/jobs", async (req, res) => {
   });
 });
 
+// validate a Mongo id up-front so a bad request can't crash the handlers
+const toObjectId = (id) => {
+  if (!ObjectId.isValid(id)) return null;
+  return new ObjectId(id);
+};
+
 app.delete("/jobs/:id", async (req, res) => {
-  const id = req.params.id;
-  const result = await jobs.deleteOne({ _id: new ObjectId(id) });
+  const _id = toObjectId(req.params.id);
+  if (!_id) return res.status(404).send({ error: "Job not found" });
+  const result = await jobs.deleteOne({ _id });
   res.send(result);
 });
 
 app.put("/jobs/:id", async (req, res) => {
-  const id = req.params.id;
+  const _id = toObjectId(req.params.id);
+  if (!_id) return res.status(404).send({ error: "Job not found" });
   const updatedJob = req.body;
 
   const result = await jobs.updateOne(
-    { _id: new ObjectId(id) },
+    { _id },
     { $set: updatedJob },
   );
 
@@ -132,18 +140,10 @@ app.put("/jobs/:id", async (req, res) => {
 });
 
 app.get("/jobs/:id", async (req, res) => {
-  const id = req.params.id;
-
-  const result = await jobs.findOne({
-    _id: new ObjectId(id),
-  });
-
-  if (!result) {
-    return res.status(404).send({
-      message: "Job not found",
-    });
-  }
-
+  const _id = toObjectId(req.params.id);
+  if (!_id) return res.status(404).send({ error: "Job not found" });
+  const result = await jobs.findOne({ _id });
+  if (!result) return res.status(404).send({ error: "Job not found" });
   res.send(result);
 });
 
@@ -154,10 +154,25 @@ app.post("/applications", async (req, res) => {
   res.send(result);
 });
 
+app.patch("/applications/:id", async (req, res) => {
+    console.log("PATCH route hit:", req.params.id);
+
+  const id = req.params.id;
+  const query = { _id: new ObjectId(id) };
+  const updatedDocs = {
+    $set: {
+      status: req.body.status,
+    },
+  };
+  const result = await applications.updateOne(query, updatedDocs);
+
+  res.send(result);
+});
+
 app.get("/applications", async (req, res) => {
   const query = {};
   if (req.query.applicantId) {
-    query.userId = req.query.applicantId;
+    query.applicantId = req.query.applicantId;
   }
   if (req.query.jobId) {
     const asId = ObjectId.isValid(req.query.jobId)
@@ -173,7 +188,7 @@ app.get("/applications", async (req, res) => {
 app.get("/applications/count", async (req, res) => {
   const query = {};
   if (req.query.applicantId) {
-    query.userId = req.query.applicantId;
+    query.applicantId = req.query.applicantId;
   }
   const result = await applications.countDocuments(query);
   res.send({ count: result });
