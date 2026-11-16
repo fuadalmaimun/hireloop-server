@@ -15,6 +15,11 @@ app.use(express.json());
 
 const client = new MongoClient(process.env.MONGODB_URI);
 
+const myLogger = (req, res, next) => {
+  console.log("now hitting api", req.url, req.headers);
+  next();
+};
+
 export async function connectToMongoDB() {
   try {
     await client.connect();
@@ -36,6 +41,26 @@ app.get("/", (req, res) => {
   res.send("Hireloop Server is running!");
 });
 
+
+const verifyToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).send({
+      message: "Unauthorized",
+    });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).send({
+      message: "Unauthorized",
+    });
+  }
+  console.log("Token received:", token);  
+  next();
+};
+
 // users related api
 app.get("/users", async (req, res) => {
   const cursor = users.find({});
@@ -47,6 +72,20 @@ app.get("/users/:id/premium", async (req, res) => {
   const id = req.params.id;
   const query = { _id: new ObjectId(id) };
   const result = await users.findOne(query, { projection: { premium: 1 } });
+  res.send(result);
+});
+
+app.patch("/users/:id/role", async (req, res) => {
+  const id = req.params.id;
+  const query = { _id: new ObjectId(id) };
+
+  const updatedDocs = {
+    $set: {
+      role: req.body.role,
+    },
+  };
+
+  const result = await users.updateOne(query, updatedDocs);
   res.send(result);
 });
 
@@ -94,7 +133,7 @@ app.post("/jobs", async (req, res) => {
     recruiterId,
   });
 
- if (!recruiter?.premium && jobCount >= 9) {
+  if (!recruiter?.premium && jobCount >= 9) {
     return res.status(403).send({
       success: false,
       message: "Free plan allows only 9 job postings. Upgrade to Premium.",
@@ -131,10 +170,7 @@ app.put("/jobs/:id", async (req, res) => {
   if (!_id) return res.status(404).send({ error: "Job not found" });
   const updatedJob = req.body;
 
-  const result = await jobs.updateOne(
-    { _id },
-    { $set: updatedJob },
-  );
+  const result = await jobs.updateOne({ _id }, { $set: updatedJob });
 
   res.send(result);
 });
@@ -155,7 +191,7 @@ app.post("/applications", async (req, res) => {
 });
 
 app.patch("/applications/:id", async (req, res) => {
-    console.log("PATCH route hit:", req.params.id);
+  console.log("PATCH route hit:", req.params.id);
 
   const id = req.params.id;
   const query = { _id: new ObjectId(id) };
@@ -169,7 +205,7 @@ app.patch("/applications/:id", async (req, res) => {
   res.send(result);
 });
 
-app.get("/applications", async (req, res) => {
+app.get("/applications", verifyToken, async (req, res) => {
   const query = {};
   if (req.query.applicantId) {
     query.applicantId = req.query.applicantId;
