@@ -7,7 +7,7 @@ import Stripe from "stripe";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 8000;
 
 // middleware
 app.use(cors());
@@ -34,7 +34,7 @@ export async function connectToMongoDB() {
 const connectedClient = await connectToMongoDB();
 const db = connectedClient.db("hireloop");
 const users = db.collection("user");
-const sessions = db.collection("sessions");
+const sessions = db.collection("session");
 const jobs = db.collection("jobs");
 const applications = db.collection("applications");
 const payments = db.collection("payments");
@@ -46,32 +46,24 @@ app.get("/", (req, res) => {
 // jwt
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
-
   if (!authHeader) {
-    return res.status(401).send({ message: "Unauthorized" });
+    return res.status(401).send({ message: "No Auth Header" });
   }
 
   const token = authHeader.split(" ")[1];
 
-  if (!token) {
-    res.status(401).send({ message: "Unauthorized" });
-    return;
+  const sessionData = await sessions.findOne({ token });
+  if (!sessionData) {
+    return res.status(401).send({ message: "Session Not Found" });
   }
+  const user = await users.findOne({
+    _id: sessionData.userId,
+  });
 
-  const query = { token };
-  const session = await sessions.findOne(query);
-
-  if (!session) {
-    res.status(401).send({ message: "Unauthorized" });
-    return;
-  }
-  const userId = session.userId;
-  const userQuery = { _id: new ObjectId(userId) };
-  const user = await users.findOne(userQuery);
   if (!user) {
-    res.status(401).send({ message: "Unauthorized" });
-    return;
+    return res.status(401).send({ message: "User Not Found" });
   }
+
   req.user = user;
   next();
 };
@@ -92,6 +84,14 @@ const verifyRecruiter = async (req, res, next) => {
   next();
 };
 
+const verifyAdmin = async (req, res, next) => {
+  if (req.user.role !== "admin") {
+    res.status(403).send({ message: "Forbidden" });
+    return;
+  }
+  next();
+};
+
 // users related api
 app.get("/users", async (req, res) => {
   const cursor = users.find({});
@@ -106,7 +106,7 @@ app.get("/users/:id/premium", async (req, res) => {
   res.send(result);
 });
 
-app.patch("/users/:id/role", async (req, res) => {
+app.patch("/users/:id/role", verifyToken, verifyAdmin, async (req, res) => {
   const id = req.params.id;
   const query = { _id: new ObjectId(id) };
 
