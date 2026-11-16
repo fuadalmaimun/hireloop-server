@@ -15,6 +15,7 @@ app.use(express.json());
 
 const client = new MongoClient(process.env.MONGODB_URI);
 
+// custom middleware
 const myLogger = (req, res, next) => {
   console.log("now hitting api", req.url, req.headers);
   next();
@@ -33,6 +34,7 @@ export async function connectToMongoDB() {
 const connectedClient = await connectToMongoDB();
 const db = connectedClient.db("hireloop");
 const users = db.collection("user");
+const sessions = db.collection("sessions");
 const jobs = db.collection("jobs");
 const applications = db.collection("applications");
 const payments = db.collection("payments");
@@ -41,23 +43,52 @@ app.get("/", (req, res) => {
   res.send("Hireloop Server is running!");
 });
 
-
-const verifyToken = (req, res, next) => {
+// jwt
+const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
+
   if (!authHeader) {
-    return res.status(401).send({
-      message: "Unauthorized",
-    });
+    return res.status(401).send({ message: "Unauthorized" });
   }
 
   const token = authHeader.split(" ")[1];
 
   if (!token) {
-    return res.status(401).send({
-      message: "Unauthorized",
-    });
+    res.status(401).send({ message: "Unauthorized" });
+    return;
   }
-  console.log("Token received:", token);  
+
+  const query = { token };
+  const session = await sessions.findOne(query);
+
+  if (!session) {
+    res.status(401).send({ message: "Unauthorized" });
+    return;
+  }
+  const userId = session.userId;
+  const userQuery = { _id: new ObjectId(userId) };
+  const user = await users.findOne(userQuery);
+  if (!user) {
+    res.status(401).send({ message: "Unauthorized" });
+    return;
+  }
+  req.user = user;
+  next();
+};
+
+// must call this middleware after verifyToken
+const verifySeeker = async (req, res, next) => {
+  if (req.user.role !== "seeker") {
+    res.status(403).send({ message: "Forbidden" });
+    return;
+  }
+  next();
+};
+const verifyRecruiter = async (req, res, next) => {
+  if (req.user.role !== "recruiter") {
+    res.status(403).send({ message: "Forbidden" });
+    return;
+  }
   next();
 };
 
@@ -124,7 +155,7 @@ app.get("/jobs", async (req, res) => {
 });
 
 // insert a new job
-app.post("/jobs", async (req, res) => {
+app.post("/jobs", verifyToken, verifyRecruiter, async (req, res) => {
   const { recruiterId } = req.body;
   const recruiter = await users.findOne({
     _id: recruiterId,
@@ -184,7 +215,7 @@ app.get("/jobs/:id", async (req, res) => {
 });
 
 // apply to a job — one application per seeker per job;
-app.post("/applications", async (req, res) => {
+app.post("/applications", verifyToken, verifySeeker, async (req, res) => {
   const application = req.body;
   const result = await applications.insertOne(application);
   res.send(result);
@@ -207,20 +238,31 @@ app.patch("/applications/:id", async (req, res) => {
 
 app.get("/applications", verifyToken, async (req, res) => {
   const query = {};
-  if (req.query.applicantId) {
-    query.applicantId = req.query.applicantId;
+
+  const applicantId = req.query.applicantId;
+  const jobId = req.query.jobId;
+
+  if (applicantId) {
+    query.applicantId = applicantId;
   }
-  if (req.query.jobId) {
-    const asId = ObjectId.isValid(req.query.jobId)
-      ? new ObjectId(req.query.jobId)
-      : null;
-    query.jobId = asId ? { $in: [req.query.jobId, asId] } : req.query.jobId;
+
+  if (jobId) {
+    const jobQuery = { _id: new ObjectId(jobId) };
+    const job = await findOne(jobQuery);
+    if (
+      job.recruiterId !== req.user._id.toString() &&
+      req.user.role !== "admin"
+    ) {
+      res.status(403).send({ message: "Forbidden" });
+      return;
+    }
+
+    query.jobId = jobId;
   }
 
   const result = await applications.find(query).toArray();
   res.send(result);
 });
-
 app.get("/applications/count", async (req, res) => {
   const query = {};
   if (req.query.applicantId) {
