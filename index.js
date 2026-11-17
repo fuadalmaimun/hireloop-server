@@ -93,7 +93,7 @@ const verifyAdmin = async (req, res, next) => {
 };
 
 // users related api
-app.get("/users", async (req, res) => {
+app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
   const cursor = users.find({});
   const result = await cursor.toArray();
   res.send(result);
@@ -316,3 +316,5 @@ app.post("/payments/checkout-verify", async (req, res) => {
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
 });
+
+export default app
